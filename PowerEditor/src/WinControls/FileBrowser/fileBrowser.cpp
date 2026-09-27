@@ -58,12 +58,14 @@ enum ItemIdx
 #define FB_ADDFILE (WM_USER + 1024)
 #define FB_RMFILE  (WM_USER + 1025)
 #define FB_RNFILE  (WM_USER + 1026)
+#define FB_REFRESH (WM_USER + 1027)
 
 enum FBCmd
 {
 	FB_CMD_AIMFILE,
 	FB_CMD_FOLDALL,
-	FB_CMD_EXPANDALL
+	FB_CMD_EXPANDALL,
+	FB_CMD_REFRESH
 };
 
 
@@ -142,9 +144,9 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 
 			setDpi();
 			const int iconSizeDyn = _dpiManager.scale(16);
-			constexpr int nbIcons = 3;
-			int iconIDs[nbIcons] = { IDI_FB_SELECTCURRENTFILE, IDI_FB_FOLDALL, IDI_FB_EXPANDALL};
-			int iconDarkModeIDs[nbIcons] = { IDI_FB_SELECTCURRENTFILE_DM, IDI_FB_FOLDALL_DM, IDI_FB_EXPANDALL_DM};
+			constexpr int nbIcons = 4;
+			int iconIDs[nbIcons] = { IDI_FB_SELECTCURRENTFILE, IDI_FB_FOLDALL, IDI_FB_EXPANDALL, IDI_FUNCLIST_RELOADBUTTON };
+			int iconDarkModeIDs[nbIcons] = { IDI_FB_SELECTCURRENTFILE_DM, IDI_FB_FOLDALL_DM, IDI_FB_EXPANDALL_DM, IDI_FUNCLIST_RELOADBUTTON_DM };
 
 			// Create an image lists for the toolbar icons
 			HIMAGELIST hImageList = ImageList_Create(iconSizeDyn, iconSizeDyn, ILC_COLOR32 | ILC_MASK, nbIcons, 0);
@@ -190,11 +192,18 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 			tbButtons[2].fsStyle = BTNS_BUTTON;
 			tbButtons[2].iString = 0;
 
+			tbButtons[3].idCommand = FB_CMD_REFRESH;
+			tbButtons[3].iBitmap = 3;
+			tbButtons[3].fsState = TBSTATE_ENABLED;
+			tbButtons[3].fsStyle = BTNS_BUTTON;
+			tbButtons[3].iString = 0;
+
 			// tips text for toolbar buttons
 			NativeLangSpeaker *pNativeSpeaker = nppParam.getNativeLangSpeaker();
 			_expandAllFolders = pNativeSpeaker->getAttrNameStr(_expandAllFolders.c_str(), FOLDERASWORKSPACE_NODE, "ExpandAllFoldersTip");
 			_collapseAllFolders = pNativeSpeaker->getAttrNameStr(_collapseAllFolders.c_str(), FOLDERASWORKSPACE_NODE, "CollapseAllFoldersTip");
 			_locateCurrentFile = pNativeSpeaker->getAttrNameStr(_locateCurrentFile.c_str(), FOLDERASWORKSPACE_NODE, "LocateCurrentFileTip");
+			_refresh = pNativeSpeaker->getAttrNameStr(_refresh.c_str(), FOLDERASWORKSPACE_NODE, "RefreshTip");
 
 			::SendMessage(_hToolbarMenu, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
 			::SendMessage(_hToolbarMenu, TB_SETBUTTONSIZE, 0, MAKELONG(iconSizeDyn, iconSizeDyn));
@@ -320,6 +329,12 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 					break;
 				}
 
+				case FB_CMD_REFRESH:
+				{
+					refresh();
+					break;
+				}
+
 				default:
 					popupMenuCmd(LOWORD(wParam));
 			}
@@ -336,6 +351,11 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 
 		case FB_ADDFILE:
 		{
+			if (_isRefreshing)
+			{
+				_refreshPending = true;
+				break;
+			}
 
 			std::vector<FilesToChange> groupedFiles = getFilesFromParam(lParam);
 
@@ -349,6 +369,11 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 
 		case FB_RMFILE:
 		{
+			if (_isRefreshing)
+			{
+				_refreshPending = true;
+				break;
+			}
 
 			std::vector<FilesToChange> groupedFiles = getFilesFromParam(lParam);
 
@@ -362,6 +387,11 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 
 		case FB_RNFILE:
 		{
+			if (_isRefreshing)
+			{
+				_refreshPending = true;
+				break;
+			}
 			const auto& file2Change = *reinterpret_cast<std::vector<std::wstring>*>(lParam);
 			wstring separator = L"\\\\";
 
@@ -390,6 +420,10 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 			}
 			break;
 		}
+
+		case FB_REFRESH:
+			refresh();
+			break;
 
 		default :
 			return DockingDlgInterface::run_dlgProc(message, wParam, lParam);
@@ -580,6 +614,10 @@ void FileBrowser::notified(LPNMHDR notification)
 		else if (notification->idFrom == FB_CMD_EXPANDALL)
 		{
 			wcscpy_s(lpttt->szText, _expandAllFolders.c_str());
+		}
+		else if (notification->idFrom == FB_CMD_REFRESH)
+		{
+			wcscpy_s(lpttt->szText, _refresh.c_str());
 		}
 	}
 	else if (notification->hwndFrom == _treeView.getHSelf())
@@ -1117,6 +1155,68 @@ void FileBrowser::addRootFolder(wstring rootFolderPath, std::unordered_set<std::
 
 	_folderUpdaters.push_back(new FolderUpdater(directoryStructure, this));
 	_folderUpdaters[_folderUpdaters.size() - 1]->startWatcher();
+}
+
+void FileBrowser::refresh()
+{
+	if (_isRefreshing)
+	{
+		_refreshPending = true;
+		return;
+	}
+
+	const auto roots = getRoots();
+	if (roots.empty())
+		return;
+	_isRefreshing = true;
+
+	const auto expandedList = getExpandedPathsFromFaW();
+	std::unordered_set<std::wstring> expandedPaths(expandedList.begin(), expandedList.end());
+	const std::wstring selectedPath = getSelectedItemPath();
+	const std::vector<std::wstring> patterns{ L"*.*" };
+	HWND hTree = _treeView.getHSelf();
+
+	// Watchers remain active. If a notification is delivered during rebuilding,
+	// another refresh will reconcile the tree with the final disk state.
+	::SendMessage(hTree, WM_SETREDRAW, FALSE, 0);
+	_treeView.removeAllItems();
+	for (const auto data : _sortingDataArray)
+		delete data;
+	_sortingDataArray.clear();
+
+	for (const auto& rootPath : roots)
+	{
+		std::wstring rootName = std::filesystem::path(rootPath).filename().wstring();
+		if (rootName.empty())
+			rootName = rootPath;
+
+		FolderInfo directoryStructure(rootName, nullptr);
+		getDirectoryStructure(rootPath.c_str(), patterns, directoryStructure, true, false);
+		HTREEITEM rootItem = createFolderItemsFromDirStruct(nullptr, directoryStructure);
+		_treeView.customSorting(rootItem, categorySortFunc, 0, true);
+		applyExpandState(rootItem, &expandedPaths);
+	}
+
+	if (!selectedPath.empty())
+	{
+		std::filesystem::path pathToSelect(selectedPath);
+		while (!pathToSelect.empty() && !selectItemFromPath(pathToSelect.wstring()))
+		{
+			const auto parent = pathToSelect.parent_path();
+			if (parent == pathToSelect)
+				break;
+			pathToSelect = parent;
+		}
+	}
+
+	::SendMessage(hTree, WM_SETREDRAW, TRUE, 0);
+	::InvalidateRect(hTree, nullptr, TRUE);
+	_isRefreshing = false;
+	if (_refreshPending)
+	{
+		_refreshPending = false;
+		::PostMessage(_hSelf, FB_REFRESH, 0, 0);
+	}
 }
 
 HTREEITEM FileBrowser::createFolderItemsFromDirStruct(HTREEITEM hParentItem, const FolderInfo & directoryStructure)
