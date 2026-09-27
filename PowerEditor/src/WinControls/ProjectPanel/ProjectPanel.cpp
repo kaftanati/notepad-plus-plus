@@ -318,7 +318,9 @@ void ProjectPanel::initMenus()
 	edit_moveup = pNativeSpeaker->getProjectPanelLangMenuStr("FileMenu", IDM_PROJECT_MOVEUP, PM_MOVEUPENTRY);
 	edit_movedown = pNativeSpeaker->getProjectPanelLangMenuStr("FileMenu", IDM_PROJECT_MOVEDOWN, PM_MOVEDOWNENTRY);
 	edit_rename = pNativeSpeaker->getProjectPanelLangMenuStr("FileMenu", IDM_PROJECT_RENAME, PM_EDITRENAME);
-	edit_remove = pNativeSpeaker->getProjectPanelLangMenuStr("FileMenu", IDM_PROJECT_DELETEFILE, PM_EDITREMOVE);
+	edit_remove = pNativeSpeaker->getNativeLangMenuString(IDM_FILE_DELETE, L"Move to Recycle Bin", true);
+	wstring duplicateFile = pNativeSpeaker->getProjectPanelLangMenuStr("FileMenu", IDM_PROJECT_DUPLICATEFILE, L"Duplicate...");
+	wstring removeFromProject = pNativeSpeaker->getProjectPanelLangMenuStr("FileMenu", IDM_PROJECT_REMOVEFILEFROMPROJECT, L"Remove from project");
 	wstring edit_modifyfile = pNativeSpeaker->getProjectPanelLangMenuStr("FileMenu", IDM_PROJECT_MODIFYFILEPATH, PM_EDITMODIFYFILE);
 
 	_hFileMenu = ::CreatePopupMenu();
@@ -326,7 +328,10 @@ void ProjectPanel::initMenus()
 	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, IDM_PROJECT_MOVEDOWN, edit_movedown.c_str());
 	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, static_cast<UINT>(-1), 0);
 	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, IDM_PROJECT_RENAME, edit_rename.c_str());
+	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, IDM_PROJECT_DUPLICATEFILE, duplicateFile.c_str());
 	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, IDM_PROJECT_DELETEFILE, edit_remove.c_str());
+	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, static_cast<UINT>(-1), 0);
+	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, IDM_PROJECT_REMOVEFILEFROMPROJECT, removeFromProject.c_str());
 	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, IDM_PROJECT_MODIFYFILEPATH, edit_modifyfile.c_str());
 }
 
@@ -646,6 +651,82 @@ void ProjectPanel::openSelectFile()
 		}
 		TreeView_SetItem(_treeView.getHSelf(), &tvItem);
 	}
+}
+
+void ProjectPanel::runFileAction(ProjectFileAction action)
+{
+	HTREEITEM item = _treeView.getSelection();
+	if (!item || getNodeType(item) != nodeType_file)
+		return;
+
+	auto* path = reinterpret_cast<std::wstring*>(_treeView.getItemParam(item));
+	if (!path)
+		return;
+
+	ProjectFileActionRequest request{ action, *path, L"" };
+	if (!::SendMessage(_hParent, NPPM_INTERNAL_PROJECTFILEACTION, 0, reinterpret_cast<LPARAM>(&request)))
+		return;
+
+	if (action != ProjectFileAction::duplicate || request.resultPath.empty() ||
+		_wcsicmp(request.resultPath.c_str(), request.sourcePath.c_str()) == 0)
+		return;
+
+	const std::wstring label = ::PathFindFileNameW(request.resultPath.c_str());
+	_fullPathStrs.push_back(std::make_unique<std::wstring>(request.resultPath));
+	HTREEITEM parent = _treeView.getParent(item);
+	HTREEITEM copy = _treeView.addItem(label.c_str(), parent, INDEX_LEAF,
+		reinterpret_cast<LPARAM>(_fullPathStrs.back().get()));
+	_treeView.selectItem(copy);
+	setWorkSpaceDirty(true);
+}
+
+void ProjectPanel::syncFileAction(const ProjectFileActionRequest& request)
+{
+	if (request.action == ProjectFileAction::duplicate || !_treeView.getRoot())
+		return;
+	if (request.action == ProjectFileAction::rename && request.sourcePath == request.resultPath)
+		return;
+
+	bool changed = false;
+	std::vector<HTREEITEM> folders{ _treeView.getRoot() };
+	while (!folders.empty())
+	{
+		HTREEITEM folder = folders.back();
+		folders.pop_back();
+		for (HTREEITEM item = _treeView.getChildFrom(folder); item;)
+		{
+			HTREEITEM next = _treeView.getNextSibling(item);
+			if (getNodeType(item) == nodeType_file)
+			{
+				auto* path = reinterpret_cast<std::wstring*>(_treeView.getItemParam(item));
+				if (path && _wcsicmp(path->c_str(), request.sourcePath.c_str()) == 0)
+				{
+					if (request.action == ProjectFileAction::remove)
+						_treeView.removeItem(item);
+					else
+					{
+						*path = request.resultPath;
+						std::wstring label = ::PathFindFileNameW(path->c_str());
+						TVITEMW tvItem{};
+						tvItem.hItem = item;
+						tvItem.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+						tvItem.pszText = label.data();
+						tvItem.iImage = tvItem.iSelectedImage = INDEX_LEAF;
+						TreeView_SetItem(_treeView.getHSelf(), &tvItem);
+					}
+					changed = true;
+				}
+			}
+			else
+				folders.push_back(item);
+			item = next;
+		}
+		if (request.action == ProjectFileAction::remove && getNodeType(folder) == nodeType_folder &&
+			!_treeView.getChildFrom(folder))
+			_treeView.setItemImage(folder, INDEX_CLOSED_NODE, INDEX_CLOSED_NODE);
+	}
+	if (changed)
+		setWorkSpaceDirty(true);
 }
 
 
@@ -1044,7 +1125,14 @@ void ProjectPanel::popupMenuCmd(int cmdID)
 		break;
 
 		case IDM_PROJECT_RENAME :
-			TreeView_EditLabel(_treeView.getHSelf(), hTreeItem);
+			if (getNodeType(hTreeItem) == nodeType_file)
+				runFileAction(ProjectFileAction::rename);
+			else
+				TreeView_EditLabel(_treeView.getHSelf(), hTreeItem);
+		break;
+
+		case IDM_PROJECT_DUPLICATEFILE:
+			runFileAction(ProjectFileAction::duplicate);
 		break;
 
 		case IDM_PROJECT_NEWFOLDER :
@@ -1188,7 +1276,11 @@ void ProjectPanel::popupMenuCmd(int cmdID)
 		}
 		break;
 
-		case IDM_PROJECT_DELETEFILE :
+		case IDM_PROJECT_DELETEFILE:
+			runFileAction(ProjectFileAction::remove);
+		break;
+
+		case IDM_PROJECT_REMOVEFILEFROMPROJECT :
 		{
 			HTREEITEM parent = _treeView.getParent(hTreeItem);
 			

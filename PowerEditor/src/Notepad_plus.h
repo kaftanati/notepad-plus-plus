@@ -192,7 +192,7 @@ public:
 	bool fileSaveAllConfirm();
 	bool fileSaveAll();
 	bool fileSaveSpecific(const std::wstring& fileNameToSave);
-	bool fileSaveAs(BufferID id = BUFFER_INVALID, bool isSaveCopy = false);
+	bool fileSaveAs(BufferID id = BUFFER_INVALID, bool isSaveCopy = false, std::wstring* savedPath = nullptr);
 	bool fileDelete(BufferID id = BUFFER_INVALID);
 	bool fileRename(BufferID id = BUFFER_INVALID);
 	bool fileRenameUntitledPluginAPI(BufferID id, const wchar_t* tabNewName);

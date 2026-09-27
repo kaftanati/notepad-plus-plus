@@ -540,6 +540,47 @@ LRESULT Notepad_plus::process(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
 			break;
 		}
 
+		case NPPM_INTERNAL_PROJECTFILEACTION:
+		{
+			auto* request = reinterpret_cast<ProjectFileActionRequest*>(lParam);
+			if (!request || !doesFileExist(request->sourcePath.c_str()))
+				return FALSE;
+
+			request->resultPath.clear();
+			BufferID id = MainFileManager.getBufferFromName(request->sourcePath.c_str());
+			if (id == BUFFER_INVALID)
+				id = doOpen(request->sourcePath);
+			if (id == BUFFER_INVALID || !switchToFile(id))
+				return FALSE;
+
+			auto syncProjects = [&]() {
+				for (ProjectPanel* panel : { _pProjectPanel_1, _pProjectPanel_2, _pProjectPanel_3 })
+					if (panel)
+						panel->syncFileAction(*request);
+			};
+
+			switch (request->action)
+			{
+				case ProjectFileAction::rename:
+					if (!fileRename(id))
+						return FALSE;
+					request->resultPath = MainFileManager.getBufferByID(id)->getFullPathName();
+					syncProjects();
+					return TRUE;
+
+				case ProjectFileAction::duplicate:
+					return fileSaveAs(id, true, &request->resultPath);
+
+				case ProjectFileAction::remove:
+					if (!fileDelete(id))
+						return FALSE;
+					syncProjects();
+					checkDocState();
+					return TRUE;
+			}
+			return FALSE;
+		}
+
 		case NPPM_GETBUFFERLANGTYPE:
 		{
 			if (!wParam)

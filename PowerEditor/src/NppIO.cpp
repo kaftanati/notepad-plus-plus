@@ -1991,7 +1991,7 @@ bool Notepad_plus::fileSaveAll()
 	return true;
 }
 
-bool Notepad_plus::fileSaveAs(BufferID bufferID, bool isSaveCopy)
+bool Notepad_plus::fileSaveAs(BufferID bufferID, bool isSaveCopy, std::wstring* savedPath)
 {
 	if (bufferID == BUFFER_INVALID)
 		bufferID = _pEditView->getCurrentBufferID();
@@ -2045,6 +2045,16 @@ bool Notepad_plus::fileSaveAs(BufferID bufferID, bool isSaveCopy)
 
 	if (!fn.empty())
 	{
+		if (savedPath && isSaveCopy && _wcsicmp(fn.c_str(), origPathname.c_str()) == 0)
+		{
+			_nativeLangSpeaker.messageBox("ProjectPanelDuplicateSamePath",
+				_pPublicInterface->getHSelf(),
+				L"Choose a different name for the copy.",
+				L"Duplicate file",
+				MB_OK | MB_ICONSTOP);
+			return false;
+		}
+
 		BufferID other = _pDocTab->findBufferByName(fn.c_str());
 		if (other == BUFFER_INVALID)
 			other = _pNonDocTab->findBufferByName(fn.c_str());
@@ -2073,6 +2083,8 @@ bool Notepad_plus::fileSaveAs(BufferID bufferID, bool isSaveCopy)
 					switchToFile(bid);
 				}
 			}
+			if (res && savedPath)
+				*savedPath = fn;
 
 			return res;
 		}

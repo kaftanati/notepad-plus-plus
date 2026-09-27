@@ -62,6 +62,15 @@ enum NodeType {
 
 class CustomFileDialog;
 
+enum class ProjectFileAction { rename, duplicate, remove };
+
+struct ProjectFileActionRequest
+{
+	ProjectFileAction action;
+	std::wstring sourcePath;
+	std::wstring resultPath;
+};
+
 class ProjectPanel : public DockingDlgInterface {
 public:
 	ProjectPanel() : DockingDlgInterface(IDD_PROJECTPANEL) {}
@@ -106,6 +115,7 @@ public:
 		TreeView_SetTextColor(_treeView.getHSelf(), fgColour);
 	}
 	bool enumWorkSpaceFiles(HTREEITEM tvFrom, const std::vector<std::wstring>& patterns, std::vector<std::wstring>& fileNames);
+	void syncFileAction(const ProjectFileActionRequest& request);
 
 protected:
 	TreeView _treeView;
@@ -143,6 +153,7 @@ protected:
 	HMENU getMenuHandler(HTREEITEM selectedItem);
 	std::wstring getAbsoluteFilePath(const wchar_t* relativePath);
 	void openSelectFile();
+	void runFileAction(ProjectFileAction action);
 	void setFileExtFilter(CustomFileDialog& fDlg);
 	std::vector<std::unique_ptr<std::wstring>> _fullPathStrs;
 
