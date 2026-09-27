@@ -176,10 +176,13 @@ protected:
 	std::wstring _selectedNodeFullPath; // this member is used only for PostMessage call
 
 	std::vector<SortingData4lParam*> _sortingDataArray;
+	bool _isRefreshing = false;
+	bool _refreshPending = false;
 
 	std::wstring _expandAllFolders = L"Unfold all";
 	std::wstring _collapseAllFolders = L"Fold all";
 	std::wstring _locateCurrentFile = L"Locate current file";
+	std::wstring _refresh = L"Refresh";
 
 	void initPopupMenus();
 	void destroyMenus();
@@ -212,6 +215,7 @@ protected:
 	void notified(LPNMHDR notification);
 	void showContextMenu(int x, int y);
 	void openSelectFile();
+	void refresh();
 	void getDirectoryStructure(const wchar_t *dir, const std::vector<std::wstring> & patterns, FolderInfo & directoryStructure, bool isRecursive, bool isInHiddenDir); 
 	HTREEITEM createFolderItemsFromDirStruct(HTREEITEM hParentItem, const FolderInfo & directoryStructure);
 	static int CALLBACK categorySortFunc(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort);
